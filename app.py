@@ -13,6 +13,7 @@ DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN") or ""   # Discord Token 备用�
 GH_TOKEN      = os.environ.get("GH_TOKEN") or ""        # GitHub PAT token,用于自动更新session token,可选
 TG_CHAT_ID    = os.environ.get("TG_CHAT_ID") or ""      # TG chat id,不填写不通知，需和bot token一起填写生效
 TG_BOT_TOKEN  = os.environ.get("TG_BOT_TOKEN") or ""    # TG bot token 
+GITHUB_COOKIE = os.environ.get("GITHUB_COOKIE") or ""   # GitHub 网页会话 Cookie, SESSION_TOKEN 失效时自动 OAuth 登录(GitHub 登录的账号用)
 
 # 解析 DISCORD_TOKEN
 DC_TOKEN = ""
@@ -20,8 +21,8 @@ if DISCORD_TOKEN:
     _parts = DISCORD_TOKEN.split(",", 1)
     DC_TOKEN = _parts[-1].strip()
 
-if not SESSION_TOKEN and not DC_TOKEN:
-    print("ℹ️ 未配置 SESSION_TOKEN 和 DISCORD_TOKEN,脚本终止。")
+if not SESSION_TOKEN and not DC_TOKEN and not GITHUB_COOKIE:
+    print("ℹ️ 未配置 SESSION_TOKEN、DISCORD_TOKEN 和 GITHUB_COOKIE,脚本终止。")
     sys.exit(1)
 
 # 构造cookie
@@ -341,6 +342,88 @@ def do_discord_login(sb) -> bool:
     return False
 
 
+# GitHub OAuth 登录（SESSION_TOKEN 失效时的备用方案，适用于 GitHub 登录的账号）
+def parse_cookie_string(cookie_str):
+    """把 'a=b; c=d' 形式的 Cookie 串解析成列表"""
+    cookies = []
+    for item in cookie_str.split(';'):
+        item = item.strip()
+        if '=' in item:
+            name, value = item.split('=', 1)
+            name = name.strip()
+            value = value.strip()
+            if name:
+                cookies.append({"name": name, "value": value})
+    return cookies
+
+
+def do_github_login(sb) -> bool:
+    """通过 GitHub 网页会话 Cookie 走 OAuth 流程登录 bot-hosting.net"""
+    print("\n🔑 通过 GitHub Cookie 登录...")
+    if not GITHUB_COOKIE:
+        print("⚠️ 未配置 GITHUB_COOKIE，跳过 GitHub 登录")
+        return False
+
+    # 1. 先打开 github.com，注入会话 Cookie
+    print("🍪 注入 GitHub 会话 Cookie...")
+    sb.uc_open_with_reconnect("https://github.com/", reconnect_time=4)
+    time.sleep(2)
+    for c in parse_cookie_string(GITHUB_COOKIE):
+        cookie_dict = {"name": c["name"], "value": c["value"], "path": "/", "secure": True}
+        # __Host- 前缀的 Cookie 规范要求不能带 Domain 属性
+        if not c["name"].startswith("__Host-"):
+            cookie_dict["domain"] = ".github.com"
+        try:
+            sb.add_cookie(cookie_dict)
+        except Exception as e:
+            print(f"⚠️ 注入 Cookie {c['name']} 失败: {e}")
+
+    # 2. 验证 GitHub 是否已登录
+    sb.uc_open_with_reconnect("https://github.com/", reconnect_time=4)
+    time.sleep(2)
+    if "/login" in sb.get_current_url().lower():
+        print("❌ GitHub Cookie 无效或已过期，请更新 GITHUB_COOKIE")
+        sb.save_screenshot("github_login_failed.png")
+        return False
+    print("✅ GitHub 会话有效")
+
+    # 3. 触发 bot-hosting 的 GitHub OAuth 登录入口
+    print("🌐 打开 bot-hosting GitHub 登录入口...")
+    sb.uc_open_with_reconnect("https://bot-hosting.net/login/github", reconnect_time=4)
+    time.sleep(3)
+
+    # 4. 若出现 GitHub 授权确认页则点击授权（通常已授权会自动跳过）
+    for _ in range(3):
+        url = sb.get_current_url()
+        if "github.com/login/oauth/authorize" in url:
+            print("🔏 检测到 GitHub 授权页，尝试点击授权按钮...")
+            try:
+                sb.click('button[name="authorize"][value="1"]', timeout=8)
+                time.sleep(3)
+            except Exception:
+                try:
+                    sb.click('button:contains("Authorize")', timeout=5)
+                    time.sleep(3)
+                except Exception as e:
+                    print(f"⚠️ 未找到授权按钮: {e}")
+                    break
+        else:
+            break
+
+    # 5. 等待跳回 bot-hosting 完成登录
+    for _ in range(30):
+        url = sb.get_current_url()
+        path = urllib.parse.urlparse(url).path
+        if "bot-hosting.net" in url and path != "/login" and not path.startswith("/login/github"):
+            print(f"✅ GitHub OAuth 登录成功！当前页面：{url}")
+            return True
+        time.sleep(0.5)
+
+    print(f"❌ GitHub 登录超时或未跳转成功，最终停留在：{sb.get_current_url()}")
+    sb.save_screenshot("github_login_timeout.png")
+    return False
+
+
 # 主流程
 def main():
     print("#" * 25)
@@ -416,6 +499,26 @@ def main():
                     print(f"❌ Discord OAuth 登录后仍未到达账单页，当前URL: {current_url}")
             else:
                 print("❌ Discord OAuth 登录失败")
+
+        # 方式3: GitHub OAuth 登录（备用，适用于 GitHub 登录的账号）
+        if not login_ok and GITHUB_COOKIE:
+            _LOGIN_METHOD = "GitHub Cookie"
+            print("\n🔄 尝试 GitHub OAuth 登录...")
+            if do_github_login(sb):
+                print("🌐 访问 https://bot-hosting.net/a/billings ...")
+                sb.open("https://bot-hosting.net/a/billings")
+                sb.wait_for_ready_state_complete()
+                sb.sleep(3)
+                current_url = sb.get_current_url()
+                current_title = sb.get_title()
+                print(f"📝 当前URL: {current_url}, Title: {current_title}")
+                if "a/billings" in current_url:
+                    login_ok = True
+                    print("✅ GitHub OAuth 登录成功,当前已到达账单页")
+                else:
+                    print(f"❌ GitHub OAuth 登录后仍未到达账单页，当前URL: {current_url}")
+            else:
+                print("❌ GitHub OAuth 登录失败")
 
         if not login_ok:
             error_msg = "Cookie 已失效或页面异常"
