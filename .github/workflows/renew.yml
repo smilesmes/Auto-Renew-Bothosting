@@ -36,35 +36,36 @@ jobs:
 
       - name: 🚀 运行续期脚本
         env:
-          EMAIL: ${{ secrets.EMAIL }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
-          SESSION_TOKEN: ${{ secrets.SESSION_TOKEN }}
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          电子邮箱: ${{ 秘密.EMAIL }}
+          GH_TOKEN: ${{ 秘密.GH_TOKEN }}
+          DISCORD_TOKEN: ${{ 秘密.DISCORD_TOKEN }}
+          SESSION_TOKEN: ${{ 秘密.SESSION_TOKEN }}
+          GITHUB_COOKIE: ${{ 秘密.GITHUB_COOKIE }}
+          TG_BOT_TOKEN: ${{ 秘密.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ 秘密.TG_CHAT_ID }}
         run: |
           xvfb-run --auto-servernum python3 app.py
 
       - name: 🧽 清理进程和临时文件
-        if: always()
+        如果: 总是（）
         run: |
-          pkill -f sing-box || true
-          pkill -f chromedriver || true
-          pkill -f chrome || true
-          pkill -f Xvfb || true
+          pkill -f 歌唱盒 ||真实
+          pkill -f chromedriver ||真实
+          pkill -f 铬 ||真实
+          pkill -f Xvfb ||真实
           rm -f sing-box sing-box-config.json sing-box.log
 
       - name: 🧹 清理旧的工作流运行记录
-        if: always()
+        如果: 总是（）
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          runs=$(gh run list --workflow="${{ github.workflow }}" --limit=100 --json databaseId --jq '.[].databaseId')
-          count=0
-          for run_id in $runs; do
-            count=$((count + 1))
-            if [ $count -gt 1 ]; then
+          运行=$(gh 运行列表 --workflow="${{ github.workflow }}" --limit=100 --json databaseId --jq '.[].databaseId')
+          计数=0
+          对于 $runs 中的 run_id；做
+            计数=$((计数+1))
+            如果 [ $count -gt 1 ];然后
               echo "删除运行记录: $run_id"
-              gh run delete $run_id || true
-            fi
-          done
+              gh 运行删除 $run_id ||真实
+            菲
+          完成
